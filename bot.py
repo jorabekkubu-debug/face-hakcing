@@ -16,6 +16,7 @@ from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarku
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from core_engine import FacePipeline
+import task_db
 
 # Environment setup
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8204492763:AAH_X8BpE-NoNhrfToDV2U42ciST8jNaoiE")
@@ -41,12 +42,42 @@ async def cmd_start(message: Message):
         "👋 **Xush kelibsiz!**\n\n"
         "Men videolardagi inson yuzlarini Sun'iy Intellekt yordamida tahlil qiluvchi va "
         "avtomatik guruhlovchi botman.\n\n"
-        "📹 **Menga nimani yuborishingiz mumkin?**\n"
-        "1. Videosi bor **ZIP fayl** (hujjat ko'rinishida yuboring).\n"
-        "2. Yoki **Cloud.mail.ru** ommaviy havolasini yuboring.\n\n"
-        "Tahlil vaqtida men sizga real vaqtda nechta video tahlil qilingani va qanchasi qolganini aytib turaman!"
+        "🌐 **Qanday ishlatiladi?**\n"
+        "1. Veb-portaldan fayl/link yuklab **Vazifa Kodini** oling (Masalan: `RUN-4829`).\n"
+        "2. O'sha kodni bu yerga yuboring!\n"
+        "3. Yoki to'g'ridan-to'g'ri ZIP fayl yuborishingiz ham mumkin."
     )
     await message.answer(welcome_text, parse_mode="Markdown")
+
+@dp.message(F.text.startswith("RUN-") | F.text.startswith("run-"))
+async def handle_task_code(message: Message):
+    code = message.text.strip().upper()
+    task = task_db.get_task(code)
+    
+    if not task:
+        await message.answer(f"❌ **Xatolik:** `{code}` kodi topilmadi. Iltimos, veb-portaldan kodni to'g'ri oling.", parse_mode="Markdown")
+        return
+
+    msg = await message.answer(f"✅ Vazifa kodi tasdiqlandi: **{code}**\nMa'lumotlar tayyorlanmoqda...", parse_mode="Markdown")
+    
+    user_id = message.from_user.id
+    work_dir = tempfile.mkdtemp(prefix=f"bot_session_{user_id}_")
+
+    if task["source_type"] == "FILE":
+        zip_path = task["source_path_or_url"]
+        await process_videos_task(message, work_dir, zip_path, msg)
+    elif task["source_type"] == "URL":
+        url = task["source_path_or_url"]
+        await msg.edit_text("🌐 Bulutli havoladan fayl yuklab olinmoqda, iltimos kuting...")
+        zip_path = os.path.join(work_dir, "downloaded_videos.zip")
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response, open(zip_path, 'wb') as out_file:
+                shutil.copyfileobj(response, out_file)
+            await process_videos_task(message, work_dir, zip_path, msg)
+        except Exception as e:
+            await msg.edit_text(f"❌ Havoladan yuklashda xatolik: {e}")
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 @dp.message(F.document)
 async def handle_document(message: Message):
@@ -56,14 +87,12 @@ async def handle_document(message: Message):
         return
 
     msg = await message.answer("📥 ZIP fayl yuklab olinmoqda, iltimos kuting...")
-    
     user_id = message.from_user.id
     work_dir = tempfile.mkdtemp(prefix=f"bot_session_{user_id}_")
     zip_path = os.path.join(work_dir, "uploaded_videos.zip")
 
     file_info = await bot.get_file(doc.file_id)
     await bot.download_file(file_info.file_path, zip_path)
-
     await process_videos_task(message, work_dir, zip_path, msg)
 
 @dp.message(F.text.startswith("http://") | F.text.startswith("https://"))
@@ -91,7 +120,6 @@ async def process_videos_task(message: Message, work_dir: str, zip_path: str, st
 
     async def async_update_progress(current, total, current_video):
         now = time.time()
-        # Update Telegram status at most once every 3 seconds to avoid rate limits
         if now - last_update_time[0] >= 3.0 or current == total:
             last_update_time[0] = now
             pct = int((current / total) * 100)
@@ -259,7 +287,7 @@ async def cb_finish_selection(callback: CallbackQuery):
     del USER_SESSIONS[user_id]
 
 async def main():
-    print("🤖 Telegram Bot ishga tushdi...")
+    print("🤖 Telegram Bot va Web App birlashmasi ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
