@@ -68,67 +68,42 @@ HTML_CONTENT = """<!DOCTYPE html>
             margin-bottom: 32px;
         }
 
-        .tab-buttons {
-            display: flex;
-            background: rgba(15, 23, 42, 0.6);
-            border-radius: 12px;
-            padding: 4px;
-            margin-bottom: 24px;
-        }
-
-        .tab-btn {
-            flex: 1;
-            padding: 12px;
-            border: none;
-            background: transparent;
-            color: var(--text-muted);
-            font-size: 14px;
-            font-weight: 600;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .tab-btn.active {
-            background: var(--accent-color);
-            color: white;
-        }
-
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 24px;
         }
 
         label {
             display: block;
             font-size: 14px;
             font-weight: 600;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             color: var(--text-muted);
         }
 
-        input[type="text"], input[type="file"] {
+        input[type="file"] {
             width: 100%;
-            padding: 14px;
+            padding: 16px;
             background: rgba(15, 23, 42, 0.8);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 12px;
+            border: 2px dashed rgba(99, 102, 241, 0.4);
+            border-radius: 16px;
             color: white;
             font-size: 15px;
             box-sizing: border-box;
             outline: none;
+            cursor: pointer;
             transition: border-color 0.3s;
         }
 
-        input[type="text"]:focus {
+        input[type="file"]:hover {
             border-color: var(--accent-color);
         }
 
         .submit-btn {
             width: 100%;
-            padding: 16px;
+            padding: 18px;
             background: linear-gradient(135deg, #6366f1, #4f46e5);
             border: none;
-            border-radius: 12px;
+            border-radius: 14px;
             color: white;
             font-size: 16px;
             font-weight: 700;
@@ -142,6 +117,12 @@ HTML_CONTENT = """<!DOCTYPE html>
             box-shadow: 0 15px 25px -5px rgba(99, 102, 241, 0.6);
         }
 
+        .submit-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
         #resultBox {
             display: none;
             margin-top: 28px;
@@ -153,16 +134,16 @@ HTML_CONTENT = """<!DOCTYPE html>
         }
 
         .code-display {
-            font-size: 32px;
+            font-size: 36px;
             font-weight: 800;
-            letter-spacing: 2px;
+            letter-spacing: 3px;
             color: #34d399;
             margin: 12px 0;
             user-select: all;
         }
 
         .instructions {
-            font-size: 13px;
+            font-size: 14px;
             color: var(--text-muted);
             line-height: 1.5;
         }
@@ -170,28 +151,15 @@ HTML_CONTENT = """<!DOCTYPE html>
 </head>
 <body>
     <div class="container">
-        <h1>AI Video Analytics</h1>
-        <p class="subtitle">Videolarni yuklang va Telegram Bot uchun kod oling</p>
+        <h1>📁 ZIP Fayl Yuklash Portali</h1>
+        <p class="subtitle">Videoli ZIP arxivini yuklang va Telegram Bot uchun kod oling</p>
 
-        <div class="tab-buttons">
-            <button type="button" id="btnUrlTab" class="tab-btn active">🌐 Bulutli Havola</button>
-            <button type="button" id="btnFileTab" class="tab-btn">📁 ZIP Fayl Yuklash</button>
-        </div>
-
-        <form id="urlForm" onsubmit="submitUrl(event)">
+        <form id="fileForm" onsubmit="submitFile(event)">
             <div class="form-group">
-                <label>Cloud.Mail.ru yoki To'g'ridan-to'g'ri Havola</label>
-                <input type="text" id="cloudUrl" placeholder="https://cloud.mail.ru/public/..." required>
-            </div>
-            <button type="submit" class="submit-btn">Vazifa Kodini Olish 🚀</button>
-        </form>
-
-        <form id="fileForm" style="display: none;" onsubmit="submitFile(event)">
-            <div class="form-group">
-                <label>ZIP Arxivini Tanlang (Har qanday hajmda)</label>
+                <label>📁 ZIP Arxivini Tanlang (Har qanday hajmda)</label>
                 <input type="file" id="zipFileInput" accept=".zip" required>
             </div>
-            <button type="submit" class="submit-btn">Faylni Yuklash va Kod Olish 📤</button>
+            <button type="submit" class="submit-btn" id="uploadBtn">Faylni Yuklash va Kod Olish 📤</button>
         </form>
 
         <div id="resultBox">
@@ -205,34 +173,6 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <script>
-        document.getElementById('btnUrlTab').addEventListener('click', function() {
-            document.getElementById('btnUrlTab').classList.add('active');
-            document.getElementById('btnFileTab').classList.remove('active');
-            document.getElementById('urlForm').style.display = 'block';
-            document.getElementById('fileForm').style.display = 'none';
-            document.getElementById('resultBox').style.display = 'none';
-        });
-
-        document.getElementById('btnFileTab').addEventListener('click', function() {
-            document.getElementById('btnFileTab').classList.add('active');
-            document.getElementById('btnUrlTab').classList.remove('active');
-            document.getElementById('urlForm').style.display = 'none';
-            document.getElementById('fileForm').style.display = 'block';
-            document.getElementById('resultBox').style.display = 'none';
-        });
-
-        async function submitUrl(e) {
-            e.preventDefault();
-            const url = document.getElementById('cloudUrl').value;
-            const res = await fetch('/api/create-url-task', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: new URLSearchParams({'url': url})
-            });
-            const data = await res.json();
-            showResult(data.task_code);
-        }
-
         function submitFile(e) {
             e.preventDefault();
             const fileInput = document.getElementById('zipFileInput');
@@ -241,7 +181,7 @@ HTML_CONTENT = """<!DOCTYPE html>
             const formData = new FormData();
             formData.append('file', file);
 
-            const btn = document.querySelector('#fileForm button');
+            const btn = document.getElementById('uploadBtn');
             btn.disabled = true;
 
             const xhr = new XMLHttpRequest();
@@ -292,11 +232,6 @@ async def serve_home():
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
-
-@app.post("/api/create-url-task")
-async def create_url_task(url: str = Form(...)):
-    task_code = task_db.create_task(source_type="URL", source_path_or_url=url.strip())
-    return {"task_code": task_code}
 
 @app.post("/api/upload-zip-task")
 async def upload_zip_task(file: UploadFile = File(...)):
