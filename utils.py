@@ -74,56 +74,50 @@ def resolve_mailru_link(public_url):
         return public_url
 
     print("Mail.ru ommaviy havolasi aniqlandi. Direct download link olinmoqda...")
-    try:
-        # Mail.ru public path (masalan: key1/key2 yoki key1/key2/filename.zip)
-        key = public_url.split("/public/")[-1].strip("/")
+    key = public_url.split("/public/")[-1].strip("/")
 
-        # 1-USUL: Mail.ru API v2 orqali yuklash havolasini olish
-        api_url = f"https://cloud.mail.ru/api/v2/tokens/download"
+    # 1-USUL: Direct HTML regex search (Eng ishonchli va tezkor)
+    try:
+        req = urllib.request.Request(
+            public_url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        )
+        with urllib.request.urlopen(req) as response:
+            html = response.read().decode('utf-8', errors='ignore')
+
+        # cloclo CDN serverini qidiramiz
+        match = re.search(r'https://cloclo[a-zA-Z0-9_-]+\.(?:cloud\.mail|mail)\.ru/weblink/get', html)
+        if match:
+            base_cdn = match.group(0)
+            direct_url = f"{base_cdn.rstrip('/')}/{key}"
+            print(f"Direct link olindi (CDN regex): {direct_url}")
+            return direct_url
+    except Exception as e:
+        print(f"HTML Regex parse error: {e}")
+
+    # 2-USUL: Mail.ru API token endpoint
+    try:
+        api_url = f"https://cloud.mail.ru/api/v2/tokens/download?weblink={key}"
         req = urllib.request.Request(
             api_url,
             headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         )
         with urllib.request.urlopen(req) as resp:
-            res_data = json.loads(resp.read().decode('utf-8'))
-            download_token = res_data.get('body', {}).get('token')
-            url_server = res_data.get('body', {}).get('url')
+            data = json.loads(resp.read().decode('utf-8'))
+            download_token = data.get('body', {}).get('token')
+            url_server = data.get('body', {}).get('url')
 
         if url_server and download_token:
             direct_url = f"{url_server.rstrip('/')}/{key}?key={download_token}"
-            print(f"Direct link olindi (API): {direct_url[:60]}...")
+            print(f"Direct link olindi (API): {direct_url}")
             return direct_url
     except Exception as e:
-        print(f"Mail.ru API orqali olishda ogohlantirish: {e}")
+        print(f"Mail.ru API error: {e}")
 
-    # 2-USUL: Sahifa HTML parser fallback
-    try:
-        req = urllib.request.Request(
-            public_url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        with urllib.request.urlopen(req) as response:
-            html = response.read().decode('utf-8')
-
-        match_url = re.search(r'"weblink_get"\s*:\s*\[\s*\{\s*"url"\s*:\s*"(https://[^"]+)"', html)
-        if match_url:
-            base_url = match_url.group(1)
-            suffix = public_url.split('/public/')[-1]
-            direct = f"{base_url.rstrip('/')}/{suffix}"
-            print(f"Direct link olindi (HTML): {direct[:60]}...")
-            return direct
-
-        match_settings = re.search(r'window\.cloudSettings\s*=\s*(\{.*?\});', html)
-        if match_settings:
-            settings = json.loads(match_settings.group(1))
-            if 'weblink_get' in settings and len(settings['weblink_get']) > 0:
-                base_url = settings['weblink_get'][0]['url']
-                suffix = public_url.split('/public/')[-1]
-                direct = f"{base_url.rstrip('/')}/{suffix}"
-                print(f"Direct link olindi (Settings): {direct[:60]}...")
-                return direct
-    except Exception as e:
-        print(f"HTML parsing ogohlantirish: {e}")
+    # Fallback default cloclo CDN URL format
+    fallback_url = f"https://cloclo.cloud.mail.ru/weblink/get/{key}"
+    print(f"Fallback link: {fallback_url}")
+    return fallback_url
 
 def resolve_cloud_url(public_url):
     """Bulutli havolalarni (Mail.ru, Pixeldrain, Google Drive, va boshqalar) to'g'ridan-to'g'ri yuklash havolasiga o'giradi."""
