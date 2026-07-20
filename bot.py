@@ -4,6 +4,7 @@ import logging
 import asyncio
 import tempfile
 import shutil
+import time
 import urllib.request
 import urllib.parse
 from pathlib import Path
@@ -16,7 +17,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from core_engine import FacePipeline
 
 # Environment setup
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7963456789:YOUR_DEFAULT_TOKEN_HERE")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8204492763:AAH_X8BpE-NoNhrfToDV2U42ciST8jNaoiE")
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
@@ -30,7 +31,7 @@ pipeline_engine = None
 def get_pipeline():
     global pipeline_engine
     if pipeline_engine is None:
-        pipeline_engine = FacePipeline(use_gpu=False)
+        pipeline_engine = FacePipeline(use_gpu=True)
     return pipeline_engine
 
 @dp.message(CommandStart())
@@ -42,8 +43,7 @@ async def cmd_start(message: Message):
         "📹 **Menga nimani yuborishingiz mumkin?**\n"
         "1. Videosi bor **ZIP fayl** (hujjat ko'rinishida yuboring).\n"
         "2. Yoki **Cloud.mail.ru** ommaviy havolasini yuboring.\n\n"
-        "Tahlildan so'ng har bir inson bo'yicha rasmlar taqdim etiladi va keraklilarini tanlab olsangiz, "
-        "o'sha inson qatnashgan videolarni ajratib beraman!"
+        "Tahlil vaqtida men sizga real vaqtda nechta video tahlil qilingani va qanchasi qolganini aytib turaman!"
     )
     await message.answer(welcome_text, parse_mode="Markdown")
 
@@ -75,7 +75,6 @@ async def handle_url(message: Message):
     zip_path = os.path.join(work_dir, "downloaded_videos.zip")
 
     try:
-        # Simple urllib download fallback
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as response, open(zip_path, 'wb') as out_file:
             shutil.copyfileobj(response, out_file)
@@ -87,15 +86,44 @@ async def handle_url(message: Message):
 
 async def process_videos_task(message: Message, work_dir: str, zip_path: str, status_msg: Message):
     user_id = message.from_user.id
+    last_update_time = [0.0]
+
+    async def async_update_progress(current, total, current_video):
+        now = time.time()
+        # Update Telegram status at most once every 3 seconds to avoid rate limits
+        if now - last_update_time[0] >= 3.0 or current == total:
+            last_update_time[0] = now
+            pct = int((current / total) * 100)
+            bar_len = 10
+            filled = int(bar_len * current / total)
+            bar = "▓" * filled + "░" * (bar_len - filled)
+            remaining = total - current
+            vname = os.path.basename(current_video)
+            
+            text = (
+                f"⚙️ **Videolar tahlil qilinmoqda (GPU)...**\n\n"
+                f"Progress: [{bar}] **{pct}%**\n"
+                f"✅ Tahlil qilindi: **{current} / {total}** ta video\n"
+                f"⏳ Qoldi: **{remaining}** ta video\n"
+                f"📹 Hozirgi video: `{vname[:30]}`"
+            )
+            try:
+                await status_msg.edit_text(text, parse_mode="Markdown")
+            except Exception:
+                pass
+
+    loop = asyncio.get_running_loop()
+
+    def sync_progress_callback(current, total, video_name):
+        asyncio.run_coroutine_threadsafe(
+            async_update_progress(current, total, video_name), loop
+        )
+
     try:
-        await status_msg.edit_text("⚙️ Sun'iy Intellekt videolarni tahlil qilmoqda (bir necha daqiqa ketishi mumkin)...")
-        
         engine = get_pipeline()
         
-        # Async execution of blocking CPU task
-        loop = asyncio.get_running_loop()
         data_pkl_path = await loop.run_in_executor(
-            None, engine.analyze_zip, zip_path, work_dir, 5.0, None
+            None, engine.analyze_zip, zip_path, work_dir, 5.0, sync_progress_callback
         )
 
         await status_msg.edit_text("🔍 Yuzlar klasterlanmoqda va guruhlanmoqda...")
@@ -117,10 +145,14 @@ async def process_videos_task(message: Message, work_dir: str, zip_path: str, st
             "selected_ids": set()
         }
 
-        await status_msg.edit_text(f"✅ Tahlil yakunlandi! Jami **{len(person_summary)} ta inson** topildi.\nNavbati bilan namunaviy rasmlarni taqdim etaman:", parse_mode="Markdown")
-
-        # Send previews for top 10 people
         top_people = sorted(person_summary.items(), key=lambda x: x[1]['videos_count'], reverse=True)[:10]
+
+        await status_msg.edit_text(
+            f"✅ **Tahlil to'liq yakunlandi!**\n\n"
+            f"📊 Jami topilgan insonlar: **{len(person_summary)} ta**\n"
+            f"👇 Quyidagi tugmalardan o'zingizga kerakli insonni tanlang:",
+            parse_mode="Markdown"
+        )
 
         builder = InlineKeyboardBuilder()
         for pid, pdata in top_people:
@@ -130,13 +162,12 @@ async def process_videos_task(message: Message, work_dir: str, zip_path: str, st
         builder.adjust(1)
         builder.row(InlineKeyboardButton(text="📦 Tanlangan videolarni yuklab olish", callback_query_data="finish_selection"))
 
-        # Send first summary preview image if available
         first_pid, first_pdata = top_people[0]
         preview_file = FSInputFile(first_pdata["preview_path"])
         
         await message.answer_photo(
             photo=preview_file,
-            caption="👇 Quyidagi tugmalardan kerakli insonni tanlang:",
+            caption="📸 Eng ko'p ko'ringan inson (Namuna rasm):\nInsonlarni tanlab, poyondagi tugmani bosing.",
             reply_markup=builder.as_markup()
         )
 
@@ -161,7 +192,6 @@ async def cb_select_person(callback: CallbackQuery):
         session["selected_ids"].add(pid)
         await callback.answer(f"✅ Inson #{pid} tanlandi!")
 
-    # Update keyboard style
     person_summary = session["person_summary"]
     top_people = sorted(person_summary.items(), key=lambda x: x[1]['videos_count'], reverse=True)[:10]
 
@@ -221,7 +251,6 @@ async def cb_finish_selection(callback: CallbackQuery):
     else:
         await msg.edit_text("❌ Afsuski, mos videolar topilmadi yoki arxivlashda xatolik bo'ldi.")
 
-    # Cleanup temp directory
     shutil.rmtree(work_dir, ignore_errors=True)
     del USER_SESSIONS[user_id]
 
