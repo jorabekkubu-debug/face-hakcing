@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pkl
+*.whl
+face_thumbs/
+clusters_preview/
+selected_videos/
+*.zip
+.env
+.idea/
+.vscode/
