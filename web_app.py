@@ -276,3 +276,8 @@ async def upload_zip_task(file: UploadFile = File(...)):
     
     task_code = task_db.create_task(source_type="FILE", source_path_or_url=os.path.abspath(save_path))
     return {"task_code": task_code}
+
+if __name__ == "__main__":
+    import uvicorn
+    print("🌐 Web Portal kompyuterizda ishga tushmoqda: http://127.0.0.1:8000")
+    uvicorn.run("web_app:app", host="127.0.0.1", port=8000, reload=True)
