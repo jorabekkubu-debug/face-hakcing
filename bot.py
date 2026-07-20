@@ -6,6 +6,8 @@ import tempfile
 import shutil
 import time
 import zipfile
+import urllib.request
+import urllib.parse
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, types
@@ -18,6 +20,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from core_engine import FacePipeline
 import task_db
+import utils
 
 # ─── Sozlamalar ──────────────────────────────────────────────────────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8204492763:AAH_X8BpE-NoNhrfToDV2U42ciST8jNaoiE")
@@ -45,39 +48,7 @@ def get_pipeline():
         pipeline_engine = FacePipeline(use_gpu=True)
     return pipeline_engine
 
-
-# ─── /start ──────────────────────────────────────────────────────────────────
-@dp.message(CommandStart())
-async def cmd_start(message: Message):
-    text = (
-        "👋 **Xush kelibsiz!**\n\n"
-        "Men videolardagi yuzlarni AI yordamida tahlil qilaman.\n\n"
-        "📦 **Qanday ishlatiladi:**\n"
-        "1. Videolaringizni ZIP fayl ko'rinishiga oling\n"
-        "2. ZIP fayllarni bu yerga yuboring (bir yoki bir nechta)\n"
-        "3. Barcha fayllar yuborilgach **✅ Tahlilni Boshlash** tugmasini bosing\n"
-        "4. Tahlil tugagach insonlarni tanlang va videolarni yuklab oling!\n\n"
-        "🚀 Boshlash uchun ZIP fayl yuboring!"
-    )
-    await message.answer(text, parse_mode="Markdown")
-
-
-# ─── ZIP fayl qabul qilish ────────────────────────────────────────────────────
-@dp.message(F.document)
-async def handle_document(message: Message):
-    doc = message.document
-
-    # Faqat ZIP qabul qilamiz
-    if not doc.file_name.lower().endswith('.zip'):
-        await message.answer("⚠️ Iltimos, faqat `.zip` kengaytmali fayl yuboring!")
-        return
-
-    # Fayl hajmini tekshirish (Telegram max 2GB)
-    size_mb = doc.file_size / 1024 / 1024
-
-    user_id = message.from_user.id
-
-    # Yangi session yoki mavjud session
+def get_or_create_session(user_id: int) -> dict:
     if user_id not in USER_SESSIONS:
         work_dir = tempfile.mkdtemp(prefix=f"bot_{user_id}_")
         USER_SESSIONS[user_id] = {
@@ -88,35 +59,146 @@ async def handle_document(message: Message):
             "person_summary": {},
             "clustered_pkl_path": None,
         }
+    return USER_SESSIONS[user_id]
 
-    session = USER_SESSIONS[user_id]
+
+# ─── /start ──────────────────────────────────────────────────────────────────
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    text = (
+        "👋 **Xush kelibsiz!**\n\n"
+        "Men videolardagi yuzlarni AI yordamida tahlil qiluvchi botman.\n\n"
+        "🌐 **Qanday ishlatiladi?**\n"
+        "1. **Bulutli havola (link)** yuboring (Masalan: `pixeldrain.com`, `gofile.io`, `cloud.mail.ru`, `Google Drive` yoki to'g'ridan-to'g'ri ZIP link).\n"
+        "2. Yoki **Vazifa Kodini** yuboring (Masalan: `RUN-4829`).\n"
+        "3. Yoki kichik ZIP fayllarni to'g'ridan-to'g'ri yuboring.\n\n"
+        "🚀 Boshlash uchun ZIP havolasi yoki fayl yuboring!"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+
+# ─── TASK CODE (RUN-XXXX) ─────────────────────────────────────────────────────
+@dp.message(F.text.startswith("RUN-") | F.text.startswith("run-"))
+async def handle_task_code(message: Message):
+    code = message.text.strip().upper()
+    task = task_db.get_task(code)
+    
+    if not task:
+        await message.answer(f"❌ **Xatolik:** `{code}` kodi topilmadi.", parse_mode="Markdown")
+        return
+
+    user_id = message.from_user.id
+    session = get_or_create_session(user_id)
     work_dir = session["work_dir"]
 
-    # Yuklab olish
-    status = await message.answer(f"📥 `{doc.file_name}` yuklab olinmoqda ({size_mb:.1f} MB)...", parse_mode="Markdown")
+    msg = await message.answer(f"✅ Vazifa kodi tasdiqlandi: **{code}**\nFayl tayyorlanmoqda...", parse_mode="Markdown")
+
+    if task["source_type"] == "FILE":
+        src_path = task["source_path_or_url"]
+        if os.path.exists(src_path):
+            session["zip_paths"].append(src_path)
+            await msg.delete()
+            await update_collection_message(message, session)
+        else:
+            await msg.edit_text(f"❌ Fayl topilmadi: `{src_path}`", parse_mode="Markdown")
+    elif task["source_type"] == "URL":
+        await download_url_to_session(message, task["source_path_or_url"], msg, session)
+
+
+# ─── URL HAVOLASI (https://...) ──────────────────────────────────────────────
+@dp.message(F.text.startswith("http://") | F.text.startswith("https://"))
+async def handle_url(message: Message):
+    url = message.text.strip()
+    user_id = message.from_user.id
+    session = get_or_create_session(user_id)
+
+    msg = await message.answer("🌐 Bulutli havola qabul qilindi. Kaggle serveriga yuklanmoqda...")
+    await download_url_to_session(message, url, msg, session)
+
+
+async def download_url_to_session(message: Message, raw_url: str, status_msg: Message, session: dict):
+    """Bulutli havoladan ZIP ni yuklab, session ga qo'shadi."""
+    work_dir = session["work_dir"]
+    part_num = len(session["zip_paths"]) + 1
+    zip_path = os.path.join(work_dir, f"part_{part_num:02d}_download.zip")
+
+    resolved_url = utils.resolve_cloud_url(raw_url)
+
+    loop = asyncio.get_running_loop()
+
+    def do_download():
+        req = urllib.request.Request(
+            resolved_url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req) as resp, open(zip_path, 'wb') as out:
+            shutil.copyfileobj(resp, out)
+        return os.path.getsize(zip_path)
+
+    try:
+        size_bytes = await loop.run_in_executor(None, do_download)
+        size_mb = size_bytes / 1024 / 1024
+
+        if size_bytes < 100:  # Noto'g'ri html qaytgan bo'lishi mumkin
+            await status_msg.edit_text("❌ Havoladan to'g'ri ZIP fayli olinmadi. Iltimos havolani tekshiring.")
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            return
+
+        session["zip_paths"].append(zip_path)
+        await status_msg.edit_text(f"✅ Bulutdan yuklandi ({size_mb:.1f} MB)!")
+        await asyncio.sleep(1)
+        await status_msg.delete()
+        await update_collection_message(message, session)
+
+    except Exception as e:
+        logging.error(f"URL download error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Havoladan yuklashda xatolik yuz berdi:\n`{e}`", parse_mode="Markdown")
+
+
+# ─── ZIP DOCUMENT FAYL ───────────────────────────────────────────────────────
+@dp.message(F.document)
+async def handle_document(message: Message):
+    doc = message.document
+
+    if not doc.file_name.lower().endswith('.zip'):
+        await message.answer("⚠️ Iltimos, faqat `.zip` kengaytmali fayl yuboring!")
+        return
+
+    user_id = message.from_user.id
+    session = get_or_create_session(user_id)
+    work_dir = session["work_dir"]
+
+    size_mb = doc.file_size / 1024 / 1024
+    status = await message.answer(f"📥 `{doc.file_name}` yuklanmoqda ({size_mb:.1f} MB)...", parse_mode="Markdown")
     zip_path = os.path.join(work_dir, f"part_{len(session['zip_paths']) + 1:02d}_{doc.file_name}")
 
     try:
         file_info = await bot.get_file(doc.file_id)
         await bot.download_file(file_info.file_path, zip_path)
+        session["zip_paths"].append(zip_path)
+        await status.delete()
+        await update_collection_message(message, session)
+
     except Exception as e:
-        await status.edit_text(f"❌ Yuklashda xatolik: {e}")
-        return
+        err_str = str(e)
+        if "file is too big" in err_str.lower():
+            await status.edit_text(
+                "❌ **Telegram cheklovi:** Telegram Bot API 20 MB dan katta fayllarni chat orqali yuklashga ruxsat bermaydi.\n\n"
+                "💡 **Yechim:**\n"
+                "Faylingizni [pixeldrain.com](https://pixeldrain.com) yoki [gofile.io](https://gofile.io) ga yuklab, **linkini (havolasini)** shu botga yuboring!",
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+        else:
+            await status.edit_text(f"❌ Yuklashda xatolik: {e}")
 
-    session["zip_paths"].append(zip_path)
-    await status.delete()
 
-    # Yig'ish xabarini yangilaymiz
-    await update_collection_message(message, session)
-
-
+# ─── YIG'ISH XABARI ──────────────────────────────────────────────────────────
 async def update_collection_message(message: Message, session: dict):
-    """ZIP yig'ish holatini ko'rsatuvchi xabarni yangilaydi yoki yaratadi."""
-    user_id = message.from_user.id
     zip_paths = session["zip_paths"]
     count = len(zip_paths)
 
-    # Ro'yxat
     lines = []
     total_mb = 0.0
     for i, zp in enumerate(zip_paths, 1):
@@ -128,10 +210,9 @@ async def update_collection_message(message: Message, session: dict):
         f"📂 **{count} ta ZIP fayl qabul qilindi** (jami {total_mb:.1f} MB)\n\n"
         + "\n".join(lines)
         + "\n\n"
-        "➕ Yana ZIP yuboring yoki tahlilni boshlang:"
+        "➕ Yana ZIP / Link yuboring yoki tahlilni boshlang:"
     )
 
-    # Keyboard
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(
         text=f"🚀 Tahlilni Boshlash ({count} ta ZIP)",
@@ -143,7 +224,6 @@ async def update_collection_message(message: Message, session: dict):
     ))
     markup = builder.as_markup()
 
-    # Yangi xabar yoki mavjudni yangilash
     if session["collection_msg_id"]:
         try:
             await bot.edit_message_text(
@@ -155,19 +235,19 @@ async def update_collection_message(message: Message, session: dict):
             )
             return
         except Exception:
-            pass  # Yangilashda xatolik bo'lsa, yangi xabar yuboramiz
+            pass
 
     sent = await message.answer(text, parse_mode="Markdown", reply_markup=markup)
     session["collection_msg_id"] = sent.message_id
 
 
-# ─── Tahlilni boshlash ────────────────────────────────────────────────────────
+# ─── TAHLILNI BOSHLASH ───────────────────────────────────────────────────────
 @dp.callback_query(F.data == "start_analysis")
 async def cb_start_analysis(callback: CallbackQuery):
     user_id = callback.from_user.id
 
     if user_id not in USER_SESSIONS or not USER_SESSIONS[user_id]["zip_paths"]:
-        await callback.answer("⚠️ Avval ZIP fayl yuboring!", show_alert=True)
+        await callback.answer("⚠️ Avval ZIP fayl yoki link yuboring!", show_alert=True)
         return
 
     await callback.answer("🚀 Tahlil boshlanmoqda...")
@@ -176,7 +256,6 @@ async def cb_start_analysis(callback: CallbackQuery):
     zip_paths = session["zip_paths"]
     work_dir  = session["work_dir"]
 
-    # Yig'ish xabarini o'chirish
     try:
         await callback.message.delete()
     except Exception:
@@ -191,18 +270,18 @@ async def cb_start_analysis(callback: CallbackQuery):
     await process_zips_task(callback.message, session, zip_paths, work_dir, status_msg)
 
 
-# ─── Bekor qilish ─────────────────────────────────────────────────────────────
+# ─── BEKOR QILISH ─────────────────────────────────────────────────────────────
 @dp.callback_query(F.data == "cancel_session")
 async def cb_cancel(callback: CallbackQuery):
     user_id = callback.from_user.id
     if user_id in USER_SESSIONS:
         shutil.rmtree(USER_SESSIONS[user_id]["work_dir"], ignore_errors=True)
         del USER_SESSIONS[user_id]
-    await callback.message.edit_text("❌ Bekor qilindi. Qayta boshlash uchun ZIP fayl yuboring.")
+    await callback.message.edit_text("❌ Bekor qilindi. Qayta boshlash uchun link yoki fayl yuboring.")
     await callback.answer()
 
 
-# ─── Asosiy tahlil vazifasi ───────────────────────────────────────────────────
+# ─── ASOSIY TAHLIL VAZIFASI ───────────────────────────────────────────────────
 async def process_zips_task(
     message: Message,
     session: dict,
@@ -245,7 +324,6 @@ async def process_zips_task(
     try:
         engine = get_pipeline()
 
-        # Barcha ZIP larni birga tahlil qilamiz
         data_pkl = await loop.run_in_executor(
             None,
             engine.analyze_zip_batch,
@@ -269,11 +347,9 @@ async def process_zips_task(
             del USER_SESSIONS[user_id]
             return
 
-        # Session yangilash
         session["person_summary"]    = person_summary
         session["clustered_pkl_path"] = os.path.join(work_dir, "faces_clustered.pkl")
 
-        # Umumiy statistika
         total_videos = sum(p["videos_count"] for p in person_summary.values())
         top_people = sorted(
             person_summary.items(),
@@ -290,7 +366,6 @@ async def process_zips_task(
             parse_mode="Markdown"
         )
 
-        # Inson tanlash klaviaturasi
         builder = InlineKeyboardBuilder()
         for pid, pdata in top_people:
             btn = f"👤 Inson #{pid}  ({pdata['videos_count']} ta video)"
@@ -301,7 +376,6 @@ async def process_zips_task(
             callback_data="finish_selection"
         ))
 
-        # Preview rasm
         first_pid, first_data = top_people[0]
         preview_file = FSInputFile(first_data["preview_path"])
         await message.answer_photo(
@@ -323,12 +397,12 @@ async def process_zips_task(
         await status_msg.edit_text(f"❌ Xatolik yuz berdi:\n`{e}`", parse_mode="Markdown")
 
 
-# ─── Inson tanlash ────────────────────────────────────────────────────────────
+# ─── INSON TANLASH ────────────────────────────────────────────────────────────
 @dp.callback_query(F.data.startswith("select_person_"))
 async def cb_select_person(callback: CallbackQuery):
     user_id = callback.from_user.id
     if user_id not in USER_SESSIONS:
-        await callback.answer("⚠️ Sessiya muddati tugagan. Qayta ZIP yuboring.", show_alert=True)
+        await callback.answer("⚠️ Sessiya muddati tugagan. Qayta ZIP/link yuboring.", show_alert=True)
         return
 
     pid = int(callback.data.split("_")[-1])
@@ -341,7 +415,6 @@ async def cb_select_person(callback: CallbackQuery):
         session["selected_ids"].add(pid)
         await callback.answer(f"✅ Inson #{pid} tanlandi!")
 
-    # Klaviaturani yangilash
     person_summary = session["person_summary"]
     top_people = sorted(
         person_summary.items(),
@@ -368,7 +441,7 @@ async def cb_select_person(callback: CallbackQuery):
         pass
 
 
-# ─── Yuklab olish ─────────────────────────────────────────────────────────────
+# ─── YUKLAB OLISH ─────────────────────────────────────────────────────────────
 @dp.callback_query(F.data == "finish_selection")
 async def cb_finish_selection(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -391,7 +464,6 @@ async def cb_finish_selection(callback: CallbackQuery):
 
     loop = asyncio.get_running_loop()
 
-    # Barcha ZIP lardagi mos videolarni bitta ZIP ga yig'amiz
     await loop.run_in_executor(
         None,
         _extract_from_multiple_zips,
@@ -417,23 +489,19 @@ async def cb_finish_selection(callback: CallbackQuery):
     else:
         await msg.edit_text("❌ Mos videolar topilmadi yoki arxivlashda xatolik bo'ldi.")
 
-    # Sessionni tozalash
     shutil.rmtree(work_dir, ignore_errors=True)
     if user_id in USER_SESSIONS:
         del USER_SESSIONS[user_id]
 
 
 def _extract_from_multiple_zips(zip_paths, clustered_pkl_path, target_ids, output_zip_path):
-    """Klasterlangan ma'lumotdan mos videolarni topib, yangi ZIP ga yozadi."""
     import pickle
+    from collections import defaultdict
 
     with open(clustered_pkl_path, "rb") as f:
         records = pickle.load(f)
 
     target_set = set(target_ids)
-
-    # zip_path -> set of zip_inner_path
-    from collections import defaultdict
     zip_to_videos = defaultdict(set)
     for r in records:
         if r.get("person_id") in target_set:
@@ -448,7 +516,6 @@ def _extract_from_multiple_zips(zip_paths, clustered_pkl_path, target_ids, outpu
                         try:
                             data = src_zip.read(v_path)
                             base_name = os.path.basename(v_path)
-                            # Nom to'qnashuvi oldini olish
                             final_name = base_name
                             counter = 1
                             while final_name in seen_names:
@@ -466,9 +533,8 @@ def _extract_from_multiple_zips(zip_paths, clustered_pkl_path, target_ids, outpu
     return output_zip_path
 
 
-# ─── Main ─────────────────────────────────────────────────────────────────────
 async def main():
-    print("🤖 Bot ishga tushdi. ZIP fayllar kutilmoqda...")
+    print("🤖 Bot ishga tushdi. Havolalar yoki ZIP fayllar kutilmoqda...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

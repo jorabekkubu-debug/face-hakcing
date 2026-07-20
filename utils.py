@@ -65,49 +65,27 @@ class RemoteFile:
         self.position += len(data)
         return data
 
-def resolve_mailru_link(public_url):
-    if "cloclo" in public_url:
-        return public_url
-    
-    # Check if it's a cloud.mail.ru public link
-    if "cloud.mail.ru/public/" in public_url:
-        print("Mail.ru ommaviy havolasi aniqlandi. To'g'ridan-to'g'ri yuklash havolasi olinmoqda...")
-        req = urllib.request.Request(
-            public_url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
-        try:
-            with urllib.request.urlopen(req) as response:
-                html = response.read().decode('utf-8')
-        except Exception as e:
-            print(f"Ogohlantirish: Ommaviy sahifani ochib bo'lmadi ({e}). Havolani o'zi ishlatiladi.")
-            return public_url
-            
-        # Search for window.cloudSettings or weblink_get
-        match_url = re.search(r'"weblink_get"\s*:\s*\[\s*\{\s*"url"\s*:\s*"(https://[^"]+)"', html)
-        if not match_url:
-            match_settings = re.search(r'window\.cloudSettings\s*=\s*(\{.*?\});', html)
-            if match_settings:
-                try:
-                    settings = json.loads(match_settings.group(1))
-                    if 'weblink_get' in settings and len(settings['weblink_get']) > 0:
-                        base_url = settings['weblink_get'][0]['url']
-                        suffix = public_url.split('/public/')[-1]
-                        direct = f"{base_url.rstrip('/')}/{suffix}"
-                        print(f"To'g'ridan-to'g'ri havola olindi: {direct}")
-                        return direct
-                except Exception:
-                    pass
-            print("Ogohlantirish: Sahifadan yuklash manzili topilmadi. Havolaning o'zi ishlatiladi.")
-            return public_url
-            
-        base_url = match_url.group(1)
-        suffix = public_url.split('/public/')[-1]
-        direct = f"{base_url.rstrip('/')}/{suffix}"
-        print(f"To'g'ridan-to'g'ri havola olindi: {direct}")
-        return direct
-        
-    return public_url
+def resolve_cloud_url(public_url):
+    """Bulutli havolalarni (Mail.ru, Pixeldrain, Google Drive, va boshqalar) to'g'ridan-to'g'ri yuklash havolasiga o'giradi."""
+    url = public_url.strip()
+
+    # Pixeldrain: https://pixeldrain.com/u/ID -> https://pixeldrain.com/api/file/ID
+    if "pixeldrain.com/u/" in url:
+        file_id = url.split("/u/")[-1].split("?")[0].split("#")[0]
+        return f"https://pixeldrain.com/api/file/{file_id}"
+
+    # Google Drive: https://drive.google.com/file/d/ID/view -> direct download
+    if "drive.google.com" in url:
+        match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+        if match:
+            file_id = match.group(1)
+            return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    # Mail.ru
+    if "cloud.mail.ru/public/" in url:
+        return resolve_mailru_link(url)
+
+    return url
 
 def open_zip(zip_path, password=None):
     if zip_path.startswith("http://") or zip_path.startswith("https://"):
