@@ -171,6 +171,9 @@ async def process_videos_task(message: Message, work_dir: str, zip_path: str, st
             reply_markup=builder.as_markup()
         )
 
+    except zipfile.BadZipFile:
+        await status_msg.edit_text("❌ **Xatolik:** Yuborilgan fayl yoki havola to'g'ri ZIP arxiv emas!\nIltimos, videolarni `.zip` fayli ko'rinishida yuboring.", parse_mode="Markdown")
+        shutil.rmtree(work_dir, ignore_errors=True)
     except Exception as e:
         logging.error(f"Xatolik: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Xatolik yuz berdi: {e}")
