@@ -66,7 +66,7 @@ class RemoteFile:
         return data
 
 def resolve_mailru_link(public_url):
-    """cloud.mail.ru/public/... havolasidan to'g'ridan-to'g'ri yuklab olish manzilini oladi."""
+    """cloud.mail.ru/public/... havolasidan to'g'ridan-to'g'ri yuklab olish manzilini oladi (fayl yoki papka ZIP)."""
     if "cloclo" in public_url and not public_url.endswith("cloclo.cloud.mail.ru"):
         return public_url
 
@@ -78,53 +78,45 @@ def resolve_mailru_link(public_url):
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
     }
 
-    # 1-USUL: Sahifa HTML parse qilish (clocloXX server nomini aniq topish)
+    base_cdn = None
     try:
         req = urllib.request.Request(public_url, headers=headers)
         with urllib.request.urlopen(req) as response:
             html = response.read().decode('utf-8', errors='ignore')
 
-        # Real clocloXX serverini regex orqali qidiramiz (masalan: https://cloclo15.cloud.mail.ru/weblink/get)
-        match = re.search(r'https://cloclo\d+\.(?:cloud\.mail|mail)\.ru/weblink/(?:get|view)', html)
+        match = re.search(r'https://cloclo\d+\.(?:cloud\.mail|mail)\.ru/(?:weblink|zip)/[a-zA-Z0-9_/-]+', html)
         if match:
-            base_cdn = match.group(0).replace('/weblink/view', '/weblink/get')
-            direct_url = f"{base_cdn.rstrip('/')}/{key}"
-            print(f"✅ Direct link olindi (HTML Regex): {direct_url}")
-            return direct_url
-
-        # weblink_get JSON qidirish
-        match_json = re.search(r'"weblink_get"\s*:\s*\[\s*\{\s*"url"\s*:\s*"(https://[^"]+)"', html)
-        if match_json:
-            base_cdn = match_json.group(1)
-            direct_url = f"{base_cdn.rstrip('/')}/{key}"
-            print(f"✅ Direct link olindi (JSON): {direct_url}")
-            return direct_url
+            url_found = match.group(0)
+            server_match = re.search(r'https://cloclo\d+\.(?:cloud\.mail|mail)\.ru', url_found)
+            if server_match:
+                base_cdn = server_match.group(0)
     except Exception as e:
         print(f"Mail.ru HTML fetch error: {e}")
 
-    # 2-USUL: Mail.ru API token endpoint
-    try:
-        api_url = f"https://cloud.mail.ru/api/v2/tokens/download?weblink={key}"
-        req = urllib.request.Request(api_url, headers=headers)
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            download_token = data.get('body', {}).get('token')
-            url_server = data.get('body', {}).get('url')
+    if not base_cdn:
+        base_cdn = "https://cloclo1.cloud.mail.ru"
 
-        if url_server and download_token:
-            direct_url = f"{url_server.rstrip('/')}/{key}?key={download_token}"
-            print(f"✅ Direct link olindi (API): {direct_url}")
-            return direct_url
-    except Exception as e:
-        print(f"Mail.ru API error: {e}")
+    # Mail.ru Cloud: Fayl bo'lsa /weblink/get/KEY, Papka bo'lsa /zip/v1/public/KEY
+    # Ikkala variantni ham qaytaramiz (bot.py da 404 bo'lsa 2-si ishlatiladi)
+    file_url = f"{base_cdn}/weblink/get/{key}"
+    folder_zip_url = f"{base_cdn}/zip/v1/public/{key}"
 
-    # Default fallback: cloclo1.cloud.mail.ru (cloclo.cloud.mail.ru emas!)
-    fallback_url = f"https://cloclo1.cloud.mail.ru/weblink/get/{key}"
-    print(f"⚠️ Fallback link: {fallback_url}")
-    return fallback_url
+    # Birinchi bo'lib status 200 berganini aniqlaymiz
+    for test_url in [file_url, folder_zip_url]:
+        try:
+            test_req = urllib.request.Request(test_url, method='HEAD', headers=headers)
+            with urllib.request.urlopen(test_req, timeout=5) as resp:
+                if resp.status == 200:
+                    print(f"✅ Aniqlangan to'g'ri Mail.ru link: {test_url}")
+                    return test_url
+        except Exception:
+            pass
+
+    # Agar HEAD javob bermasa, folder zip manzilini qaytaramiz (chunki papkalar ko'proq ishlatiladi)
+    print(f"⚠️ Direct link (folder default): {folder_zip_url}")
+    return folder_zip_url
 
 def resolve_cloud_url(public_url):
     """Bulutli havolalarni (Mail.ru, Pixeldrain, Google Drive, va boshqalar) to'g'ridan-to'g'ri yuklash havolasiga o'giradi."""
