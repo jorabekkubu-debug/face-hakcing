@@ -231,22 +231,47 @@ HTML_CONTENT = """<!DOCTYPE html>
             showResult(data.task_code);
         }
 
-        async function submitFile(e) {
+        function submitFile(e) {
             e.preventDefault();
             const fileInput = document.getElementById('zipFileInput');
             if (!fileInput.files[0]) return;
+            const file = fileInput.files[0];
             const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
+            formData.append('file', file);
 
-            document.querySelector('#fileForm button').innerText = 'Yuklanmoqda... ⏳';
+            const btn = document.querySelector('#fileForm button');
+            btn.disabled = true;
 
-            const res = await fetch('/api/upload-zip-task', {
-                method: 'POST',
-                body: formData
-            });
-            const data = await res.json();
-            document.querySelector('#fileForm button').innerText = 'Faylni Yuklash va Kod Olish 📤';
-            showResult(data.task_code);
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload-zip-task', true);
+
+            xhr.upload.onprogress = function(event) {
+                if (event.lengthComputable) {
+                    const percent = Math.round((event.loaded / event.total) * 100);
+                    const loadedMB = (event.loaded / (1024 * 1024)).toFixed(1);
+                    const totalMB = (event.total / (1024 * 1024)).toFixed(1);
+                    btn.innerText = `Yuklanmoqda: ${percent}% (${loadedMB} MB / ${totalMB} MB) ⏳`;
+                }
+            };
+
+            xhr.onload = function() {
+                btn.disabled = false;
+                btn.innerText = 'Faylni Yuklash va Kod Olish 📤';
+                if (xhr.status === 200) {
+                    const data = JSON.parse(xhr.responseText);
+                    showResult(data.task_code);
+                } else {
+                    alert('Fayl yuklashda xatolik bo\'ldi');
+                }
+            };
+
+            xhr.onerror = function() {
+                btn.disabled = false;
+                btn.innerText = 'Faylni Yuklash va Kod Olish 📤';
+                alert('Tarmoq xatoligi yuz berdi');
+            };
+
+            xhr.send(formData);
         }
 
         function showResult(code) {
