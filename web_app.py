@@ -296,8 +296,10 @@ async def create_url_task(url: str = Form(...)):
 async def upload_zip_task(file: UploadFile = File(...)):
     filename = f"{file.filename}"
     save_path = os.path.join("web_uploads", filename)
+    CHUNK_SIZE = 1024 * 1024  # 1MB per chunk
     with open(save_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        while chunk := await file.read(CHUNK_SIZE):
+            buffer.write(chunk)
     
     task_code = task_db.create_task(source_type="FILE", source_path_or_url=os.path.abspath(save_path))
     return {"task_code": task_code}
