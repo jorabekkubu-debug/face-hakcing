@@ -66,8 +66,8 @@ class RemoteFile:
         return data
 
 def resolve_mailru_link(public_url):
-    """cloud.mail.ru/public/... havolasidan to'g'ridan-to'g'ri yuklab olish manzilini oladi (fayl yoki papka ZIP)."""
-    if "cloclo" in public_url and not public_url.endswith("cloclo.cloud.mail.ru"):
+    """cloud.mail.ru/public/... havolasidan token va direct download link oladi."""
+    if "cloclo" in public_url and "key=" in public_url:
         return public_url
 
     if "cloud.mail.ru/public/" not in public_url:
@@ -81,41 +81,60 @@ def resolve_mailru_link(public_url):
     }
 
     base_cdn = None
+    token = None
+
+    # 1-QADAM: Page HTML dan CDN server va Download Token olish
     try:
         req = urllib.request.Request(public_url, headers=headers)
         with urllib.request.urlopen(req) as response:
             html = response.read().decode('utf-8', errors='ignore')
 
-        match = re.search(r'https://cloclo\d+\.(?:cloud\.mail|mail)\.ru/(?:weblink|zip)/[a-zA-Z0-9_/-]+', html)
-        if match:
-            url_found = match.group(0)
-            server_match = re.search(r'https://cloclo\d+\.(?:cloud\.mail|mail)\.ru', url_found)
-            if server_match:
-                base_cdn = server_match.group(0)
+        # CDN Server topish (masalan: https://cloclo53.cloud.mail.ru)
+        server_match = re.search(r'https://cloclo\d+\.(?:cloud\.mail|mail)\.ru', html)
+        if server_match:
+            base_cdn = server_match.group(0)
+
+        # Download Token topish (masalan: "download":"abc123token")
+        token_match = re.search(r'"download"\s*:\s*"([a-zA-Z0-9_-]+)"', html)
+        if token_match:
+            token = token_match.group(1)
     except Exception as e:
-        print(f"Mail.ru HTML fetch error: {e}")
+        print(f"HTML parse error: {e}")
+
+    # 2-QADAM: Agar token API orqali olinsa
+    if not token or not base_cdn:
+        try:
+            api_url = "https://cloud.mail.ru/api/v2/tokens/download"
+            req_api = urllib.request.Request(api_url, headers=headers)
+            with urllib.request.urlopen(req_api) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                token = data.get('body', {}).get('token')
+                url_server = data.get('body', {}).get('url')
+                if url_server and not base_cdn:
+                    base_cdn = url_server.split('/weblink')[0].rstrip('/')
+        except Exception as e:
+            print(f"API token error: {e}")
 
     if not base_cdn:
         base_cdn = "https://cloclo1.cloud.mail.ru"
 
-    # Mail.ru Cloud: Fayl bo'lsa /weblink/get/KEY, Papka bo'lsa /zip/v1/public/KEY
-    # Ikkala variantni ham qaytaramiz (bot.py da 404 bo'lsa 2-si ishlatiladi)
-    file_url = f"{base_cdn}/weblink/get/{key}"
-    folder_zip_url = f"{base_cdn}/zip/v1/public/{key}"
+    # URL larni shakllantirish (key token bilan)
+    token_param = f"?key={token}" if token else ""
+    folder_zip_url = f"{base_cdn}/zip/v1/public/{key}{token_param}"
+    file_url = f"{base_cdn}/weblink/get/{key}{token_param}"
 
-    # Birinchi bo'lib status 200 berganini aniqlaymiz
-    for test_url in [file_url, folder_zip_url]:
+    # Qaysi bir yangilanish javob berishini tekshiramiz (Folder ZIP birinchi)
+    for test_url in [folder_zip_url, file_url]:
         try:
             test_req = urllib.request.Request(test_url, method='HEAD', headers=headers)
             with urllib.request.urlopen(test_req, timeout=5) as resp:
-                if resp.status == 200:
-                    print(f"✅ Aniqlangan to'g'ri Mail.ru link: {test_url}")
+                if resp.status in (200, 302):
+                    print(f"✅ Mail.ru link tayyor ({resp.status}): {test_url[:70]}...")
                     return test_url
         except Exception:
             pass
 
-    # Agar HEAD javob bermasa, folder zip manzilini qaytaramiz (chunki papkalar ko'proq ishlatiladi)
-    print(f"⚠️ Direct link (folder default): {folder_zip_url}")
+    print(f"⚠️ Direct link (default folder): {folder_zip_url[:70]}...")
     return folder_zip_url
 
 def resolve_cloud_url(public_url):
