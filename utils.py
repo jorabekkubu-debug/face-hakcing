@@ -67,7 +67,7 @@ class RemoteFile:
 
 def resolve_mailru_link(public_url):
     """cloud.mail.ru/public/... havolasidan to'g'ridan-to'g'ri yuklab olish manzilini oladi."""
-    if "cloclo" in public_url:
+    if "cloclo" in public_url and not public_url.endswith("cloclo.cloud.mail.ru"):
         return public_url
 
     if "cloud.mail.ru/public/" not in public_url:
@@ -76,32 +76,39 @@ def resolve_mailru_link(public_url):
     print("Mail.ru ommaviy havolasi aniqlandi. Direct download link olinmoqda...")
     key = public_url.split("/public/")[-1].strip("/")
 
-    # 1-USUL: Direct HTML regex search (Eng ishonchli va tezkor)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    }
+
+    # 1-USUL: Sahifa HTML parse qilish (clocloXX server nomini aniq topish)
     try:
-        req = urllib.request.Request(
-            public_url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        )
+        req = urllib.request.Request(public_url, headers=headers)
         with urllib.request.urlopen(req) as response:
             html = response.read().decode('utf-8', errors='ignore')
 
-        # cloclo CDN serverini qidiramiz
-        match = re.search(r'https://cloclo[a-zA-Z0-9_-]+\.(?:cloud\.mail|mail)\.ru/weblink/get', html)
+        # Real clocloXX serverini regex orqali qidiramiz (masalan: https://cloclo15.cloud.mail.ru/weblink/get)
+        match = re.search(r'https://cloclo\d+\.(?:cloud\.mail|mail)\.ru/weblink/(?:get|view)', html)
         if match:
-            base_cdn = match.group(0)
+            base_cdn = match.group(0).replace('/weblink/view', '/weblink/get')
             direct_url = f"{base_cdn.rstrip('/')}/{key}"
-            print(f"Direct link olindi (CDN regex): {direct_url}")
+            print(f"✅ Direct link olindi (HTML Regex): {direct_url}")
+            return direct_url
+
+        # weblink_get JSON qidirish
+        match_json = re.search(r'"weblink_get"\s*:\s*\[\s*\{\s*"url"\s*:\s*"(https://[^"]+)"', html)
+        if match_json:
+            base_cdn = match_json.group(1)
+            direct_url = f"{base_cdn.rstrip('/')}/{key}"
+            print(f"✅ Direct link olindi (JSON): {direct_url}")
             return direct_url
     except Exception as e:
-        print(f"HTML Regex parse error: {e}")
+        print(f"Mail.ru HTML fetch error: {e}")
 
     # 2-USUL: Mail.ru API token endpoint
     try:
         api_url = f"https://cloud.mail.ru/api/v2/tokens/download?weblink={key}"
-        req = urllib.request.Request(
-            api_url,
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        )
+        req = urllib.request.Request(api_url, headers=headers)
         with urllib.request.urlopen(req) as resp:
             data = json.loads(resp.read().decode('utf-8'))
             download_token = data.get('body', {}).get('token')
@@ -109,14 +116,14 @@ def resolve_mailru_link(public_url):
 
         if url_server and download_token:
             direct_url = f"{url_server.rstrip('/')}/{key}?key={download_token}"
-            print(f"Direct link olindi (API): {direct_url}")
+            print(f"✅ Direct link olindi (API): {direct_url}")
             return direct_url
     except Exception as e:
         print(f"Mail.ru API error: {e}")
 
-    # Fallback default cloclo CDN URL format
-    fallback_url = f"https://cloclo.cloud.mail.ru/weblink/get/{key}"
-    print(f"Fallback link: {fallback_url}")
+    # Default fallback: cloclo1.cloud.mail.ru (cloclo.cloud.mail.ru emas!)
+    fallback_url = f"https://cloclo1.cloud.mail.ru/weblink/get/{key}"
+    print(f"⚠️ Fallback link: {fallback_url}")
     return fallback_url
 
 def resolve_cloud_url(public_url):
