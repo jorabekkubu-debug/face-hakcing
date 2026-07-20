@@ -237,16 +237,16 @@ def main():
                 faces = app.get(frame)
                 valid_faces_in_frame = False
 
-                for f in faces:
-                    x1, y1, x2, y2 = f.bbox.astype(int)
+                for face in faces:
+                    x1, y1, x2, y2 = face.bbox.astype(int)
                     w, h = x2 - x1, y2 - y1
                     if w < args.min_face_size or h < args.min_face_size:
                         continue
-                    if f.det_score < args.det_score_thresh:
+                    if face.det_score < args.det_score_thresh:
                         continue
                     
                     valid_faces_in_frame = True
-                    f_emb = f.normed_embedding.astype(np.float32)
+                    f_emb = face.normed_embedding.astype(np.float32)
                     
                     # Tracklar orasidan eng mosini qidirish
                     best_match_idx = -1
@@ -259,7 +259,7 @@ def main():
                             best_match_idx = t_idx
                     
                     # Sifat koeffitsiyenti (yuz o'lchami va ishonchliligi)
-                    quality = float(f.det_score) * (w * h)
+                    quality = float(face.det_score) * (w * h)
                     crop_y1, crop_y2 = max(0, y1), min(frame.shape[0], y2)
                     crop_x1, crop_x2 = max(0, x1), min(frame.shape[1], x2)
                     crop = frame[crop_y1:crop_y2, crop_x1:crop_x2].copy()
@@ -271,7 +271,7 @@ def main():
                             tracks[best_match_idx]["best_quality"] = quality
                             tracks[best_match_idx]["best_face"] = {
                                 "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                                "det_score": float(f.det_score),
+                                "det_score": float(face.det_score),
                                 "frame_time_sec": idx_frame / fps,
                                 "embedding": f_emb
                             }
@@ -284,7 +284,7 @@ def main():
                                 "best_quality": quality,
                                 "best_face": {
                                     "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                                    "det_score": float(f.det_score),
+                                    "det_score": float(face.det_score),
                                     "frame_time_sec": idx_frame / fps,
                                     "embedding": f_emb
                                 },

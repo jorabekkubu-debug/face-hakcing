@@ -186,10 +186,10 @@ async def process_videos_task(message: Message, work_dir: str, zip_path: str, st
         builder = InlineKeyboardBuilder()
         for pid, pdata in top_people:
             btn_text = f"👤 Inson #{pid} ({pdata['videos_count']} ta video)"
-            builder.button(text=btn_text, callback_query_data=f"select_person_{pid}")
+            builder.button(text=btn_text, callback_data=f"select_person_{pid}")
         
         builder.adjust(1)
-        builder.row(InlineKeyboardButton(text="📦 Tanlangan videolarni yuklab olish", callback_query_data="finish_selection"))
+        builder.row(InlineKeyboardButton(text="📦 Tanlangan videolarni yuklab olish", callback_data="finish_selection"))
 
         first_pid, first_pdata = top_people[0]
         preview_file = FSInputFile(first_pdata["preview_path"])

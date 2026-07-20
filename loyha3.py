@@ -61,10 +61,10 @@ def main():
         if r.get("skipped_oversized", False):
             video_info[key]["skipped_oversized"] = True
         
-        if r.get("has_face", True) and r.get("embedding") is not None:
+        if r.get("has_face", False) and r.get("embedding") is not None:
             video_info[key]["has_face"] = True
             video_info[key]["tracks"].append({
-                "person_id": r["person_id"],
+                "person_id": r.get("person_id", -1),
                 "track_len": r.get("track_len", 1)
             })
 
@@ -182,7 +182,7 @@ def main():
     # Har bir person_id uchun vakil video topish (eng yuqori det_score * track_len bo'lgan)
     person_rep_record = {}
     for r in records:
-        pid = r["person_id"]
+        pid = r.get("person_id", -2)
         if pid >= 0:
             vpath = r["video_path"]
             zip_inner = r.get("zip_inner_path")

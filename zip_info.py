@@ -46,8 +46,11 @@ def main():
     print(f"Arxiv ichidagi barcha fayllar soni: {total_files}")
     print(f"Jami video fayllar soni:            {total_videos}")
     print("-" * 60)
+    if total_videos == 0:
+        print("ZIP ichida hech qanday video topilmadi.")
+        return
     print(f"Hajmi <= {args.max_size_mb} MB bo'lgan videolar:   {small_videos} ({small_videos/total_videos*100:.1f}%)")
-    print(f"Hajmi > {args.max_size_mb} MB bo'lgan videolar:    {large_videos} ({large_videos/total_videos*100:.1f}%)")
+    print(f"Hajmi >  {args.max_size_mb} MB bo'lgan videolar:    {large_videos} ({large_videos/total_videos*100:.1f}%)")
     print("-" * 60)
     
     if total_videos > 0:

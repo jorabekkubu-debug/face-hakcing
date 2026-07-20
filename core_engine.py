@@ -61,7 +61,7 @@ class FacePipeline:
                             faces = self.app.get(frame)
                             for face in faces:
                                 bbox = face.bbox.astype(int).tolist()
-                                emb = face.embedding
+                                emb = face.normed_embedding.astype(np.float32)
                                 det_score = float(face.det_score)
 
                                 # Face crop
@@ -74,9 +74,7 @@ class FacePipeline:
                                 # Tracking similarity check
                                 matched = False
                                 for tr in tracks:
-                                    sim = np.dot(emb, tr["best_face"]["embedding"]) / (
-                                        np.linalg.norm(emb) * np.linalg.norm(tr["best_face"]["embedding"])
-                                    )
+                                    sim = np.dot(emb, tr["best_face"]["embedding"])
                                     if sim > 0.60:
                                         tr["embeddings"].append(emb)
                                         if det_score > tr["best_face"]["det_score"]:
@@ -148,7 +146,7 @@ class FacePipeline:
         with open(data_pkl_path, "rb") as f:
             records = pickle.load(f)
 
-        valid_records = [r for r in records if r.get("has_face", True) and r.get("embedding") is not None]
+        valid_records = [r for r in records if r.get("has_face", False) and r.get("embedding") is not None]
         preview_dir = os.path.join(work_dir, "clusters_preview")
         os.makedirs(preview_dir, exist_ok=True)
 

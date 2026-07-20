@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy requirements and install
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY Requirements.txt .
+RUN pip install --no-cache-dir -r Requirements.txt
 
 # Copy all project code
 COPY . .
@@ -21,5 +21,8 @@ COPY . .
 # Environment variable default
 ENV PYTHONUNBUFFERED=1
 
-# Command to run bot
-CMD ["python", "bot.py"]
+# Web port
+EXPOSE 8000
+
+# Web portal + Bot ikkalasini birga ishga tushiradi
+CMD ["python", "run_all.py"]

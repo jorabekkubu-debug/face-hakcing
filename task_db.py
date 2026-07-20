@@ -3,7 +3,7 @@ import os
 import random
 import time
 
-DB_PATH = "tasks.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
