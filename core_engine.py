@@ -21,6 +21,138 @@ class FacePipeline:
         self.app.prepare(ctx_id=0 if use_gpu else -1, det_size=(640, 640))
         print("Model tayyor!")
 
+    def analyze_zip_batch(self, zip_paths, work_dir, every_sec=5.0, progress_callback=None):
+        """Bir nechta ZIP fayllarni tahlil qilib, barcha recordlarni birlashtiradi."""
+        # Jami videolar sonini aniqlaymiz
+        zip_video_map = []
+        total_videos = 0
+        for zip_path in zip_paths:
+            try:
+                with zipfile.ZipFile(zip_path, "r") as z:
+                    videos = [info.filename for info in z.infolist()
+                              if Path(info.filename).suffix.lower() in VIDEO_EXTS]
+                zip_video_map.append((zip_path, videos))
+                total_videos += len(videos)
+            except Exception as e:
+                print(f"ZIP ochishda xatolik {zip_path}: {e}")
+
+        all_records = []
+        processed = 0
+        thumbs_dir = os.path.join(work_dir, "face_thumbs")
+        os.makedirs(thumbs_dir, exist_ok=True)
+
+        for zip_path, videos in zip_video_map:
+            with zipfile.ZipFile(zip_path, "r") as z:
+                for zip_inner_path in videos:
+                    processed += 1
+                    if progress_callback:
+                        progress_callback(processed, total_videos, zip_inner_path)
+
+                    temp_dir = tempfile.mkdtemp()
+                    try:
+                        video_file_path = z.extract(zip_inner_path, temp_dir)
+                        records = self._process_video(
+                            video_file_path, zip_path, zip_inner_path,
+                            thumbs_dir, every_sec
+                        )
+                        all_records.extend(records)
+                    except Exception as e:
+                        print(f"Video tahlilida xatolik {zip_inner_path}: {e}")
+                        all_records.append({
+                            "video_path": zip_path,
+                            "zip_inner_path": zip_inner_path,
+                            "frame_time_sec": -1.0, "bbox": [],
+                            "embedding": None, "det_score": 0.0,
+                            "thumb_path": "", "has_face": False, "track_len": 0
+                        })
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+
+        data_pkl_path = os.path.join(work_dir, "faces_data.pkl")
+        with open(data_pkl_path, "wb") as f:
+            pickle.dump(all_records, f)
+        return data_pkl_path
+
+    def _process_video(self, video_file_path, zip_path, zip_inner_path, thumbs_dir, every_sec):
+        """Bitta videoni tahlil qilib, recordlar ro'yxatini qaytaradi."""
+        records = []
+        cap = cv2.VideoCapture(video_file_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        frame_step = max(1, int(fps * every_sec))
+
+        frame_idx = 0
+        tracks = []
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_idx % frame_step == 0:
+                frame_time_sec = frame_idx / fps
+                faces = self.app.get(frame)
+                for face in faces:
+                    bbox = face.bbox.astype(int).tolist()
+                    emb = face.normed_embedding.astype(np.float32)
+                    det_score = float(face.det_score)
+
+                    h, w, _ = frame.shape
+                    x1, y1, x2, y2 = bbox
+                    x1, y1 = max(0, x1), max(0, y1)
+                    x2, y2 = min(w, x2), min(h, y2)
+                    crop = frame[y1:y2, x1:x2] if (x2 > x1 and y2 > y1) else None
+
+                    matched = False
+                    for tr in tracks:
+                        sim = np.dot(emb, tr["best_face"]["embedding"])
+                        if sim > 0.60:
+                            tr["embeddings"].append(emb)
+                            if det_score > tr["best_face"]["det_score"]:
+                                tr["best_face"] = {
+                                    "frame_time_sec": frame_time_sec, "bbox": bbox,
+                                    "embedding": emb, "det_score": det_score,
+                                }
+                                if crop is not None:
+                                    tr["best_crop"] = crop
+                            matched = True
+                            break
+                    if not matched:
+                        tracks.append({
+                            "best_face": {
+                                "frame_time_sec": frame_time_sec, "bbox": bbox,
+                                "embedding": emb, "det_score": det_score,
+                            },
+                            "best_crop": crop,
+                            "embeddings": [emb],
+                        })
+            frame_idx += 1
+        cap.release()
+
+        if not tracks:
+            records.append({
+                "video_path": zip_path, "zip_inner_path": zip_inner_path,
+                "frame_time_sec": -1.0, "bbox": [], "embedding": None,
+                "det_score": 0.0, "thumb_path": "", "has_face": False, "track_len": 0
+            })
+        else:
+            for tr in tracks:
+                thumb_path = ""
+                if tr.get("best_crop") is not None:
+                    thumb_id = uuid.uuid4().hex[:12]
+                    thumb_path = os.path.join(thumbs_dir, f"{thumb_id}.jpg")
+                    cv2.imwrite(thumb_path, tr["best_crop"])
+                records.append({
+                    "video_path": zip_path,
+                    "zip_inner_path": zip_inner_path,
+                    "frame_time_sec": tr["best_face"]["frame_time_sec"],
+                    "bbox": tr["best_face"]["bbox"],
+                    "embedding": tr["best_face"]["embedding"],
+                    "det_score": tr["best_face"]["det_score"],
+                    "thumb_path": thumb_path,
+                    "has_face": True,
+                    "track_len": len(tr["embeddings"])
+                })
+        return records
+
     def analyze_zip(self, zip_path, work_dir, every_sec=5.0, progress_callback=None):
         """1-BOSQICH: ZIP ichidagi videolarni tahlil qilish va yuz rasmlarini saqlash"""
         thumbs_dir = os.path.join(work_dir, "face_thumbs")
