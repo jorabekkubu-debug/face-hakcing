@@ -174,8 +174,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         <p class="subtitle">Videolarni yuklang va Telegram Bot uchun kod oling</p>
 
         <div class="tab-buttons">
-            <button class="tab-btn active" onclick="switchTab('urlTab')">🌐 Bulutli Havola</button>
-            <button class="tab-btn" onclick="switchTab('fileTab')">📁 ZIP Fayl Yuklash</button>
+            <button class="tab-btn active" onclick="switchTab(this, 'urlTab')">🌐 Bulutli Havola</button>
+            <button class="tab-btn" onclick="switchTab(this, 'fileTab')">📁 ZIP Fayl Yuklash</button>
         </div>
 
         <form id="urlForm" onsubmit="submitUrl(event)">
@@ -205,14 +205,13 @@ HTML_CONTENT = """<!DOCTYPE html>
     </div>
 
     <script>
-        function switchTab(tabId) {
+        function switchTab(element, tabId) {
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            element.classList.add('active');
             if (tabId === 'urlTab') {
-                event.target.classList.add('active');
                 document.getElementById('urlForm').style.display = 'block';
                 document.getElementById('fileForm').style.display = 'none';
             } else {
-                event.target.classList.add('active');
                 document.getElementById('urlForm').style.display = 'none';
                 document.getElementById('fileForm').style.display = 'block';
             }
